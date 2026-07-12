@@ -148,4 +148,4 @@ AsqavGuardrail(observe=True)
 
 ## License
 
-Elastic License 2.0 (ELv2). See [LICENSE](LICENSE).
+MIT License. See [LICENSE](LICENSE).
