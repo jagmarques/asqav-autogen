@@ -1,8 +1,4 @@
-"""asqav-autogen: an AutoGen GuardrailProvider backed by asqav signed receipts.
-
-Standalone package. It implements the GuardrailProvider protocol proposed in
-microsoft/autogen#7405 and needs no change to autogen itself.
-"""
+"""AutoGen tool policy and Asqav decision signing."""
 
 from .attach import GuardedTool, GuardedWorkbench, attach
 from .guardrail import AsqavGuardrail, PolicyFn, PolicyVerdict

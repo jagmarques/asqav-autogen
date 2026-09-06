@@ -24,7 +24,7 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
       - name: Test
-        run: pytest -q
+        run: python -m pytest -q --cov=asqav_autogen --cov-branch --cov-report=term-missing
       - name: Build wheel
         run: python -m build
 

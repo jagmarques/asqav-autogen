@@ -1,11 +1,7 @@
-"""Quickstart: sign one guarded AutoGen tool call with asqav.
+"""Run a local example tool through an Asqav guard.
 
-Run it against api.asqav.com:
-
-    ASQAV_API_KEY=sk_... python examples/quickstart.py
-
-The five lines from import to a signed receipt live in main() below. The
-helpers are importable so a test can drive the same path under a mock.
+Set ASQAV_API_KEY, then run python examples/quickstart.py. Provider setup
+and signing use the Asqav API; the weather result is a local fixture.
 """
 
 from __future__ import annotations
