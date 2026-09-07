@@ -19,6 +19,7 @@ The package requires AutoGen Core 0.7.5 through the 0.7 series and Asqav SDK 0.1
 Configure `ASQAV_API_KEY` in the application environment. Supply your configured AutoGen model client as `model_client`:
 
 ```python
+import asqav
 from autogen_agentchat.agents import AssistantAgent
 from autogen_core.tools import FunctionTool
 from asqav_autogen import AsqavGuardrail, attach
@@ -27,6 +28,7 @@ def get_weather(city: str) -> str:
     """Return a local example response."""
     return f"Weather in {city}: sunny"
 
+asqav.init()
 guard = AsqavGuardrail(agent_name="weather-agent", denied_tools={"shell"})
 tool = attach(FunctionTool(get_weather, description="Example weather"), guard)
 agent = AssistantAgent("weather_agent", model_client=model_client, tools=[tool])
@@ -44,6 +46,7 @@ Attachments expose guarded non-streaming calls. Streaming tools use their ordina
 A matching denylist entry takes precedence. Otherwise, a custom policy returns `PolicyVerdict`; without a custom policy the default is `ALLOW`.
 
 ```python
+import asqav
 from asqav_autogen import AsqavGuardrail, Decision, PolicyVerdict
 
 def policy(tool_name, args):
@@ -51,6 +54,7 @@ def policy(tool_name, args):
         return PolicyVerdict(Decision.MODIFY, "capped limit", {**args, "limit": 100})
     return PolicyVerdict(Decision.ALLOW)
 
+asqav.init()
 guard = AsqavGuardrail(agent_name="search-agent", policy=policy)
 ```
 
