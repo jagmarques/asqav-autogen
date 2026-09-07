@@ -75,12 +75,12 @@ def transport(monkeypatch):
         sdk._client.close()
 
 
-def agent_for(target, workbench=False):
+def agent_for(target, workbench=False, arguments='{"city":"Lisbon"}'):
     model = ReplayChatCompletionClient(
         [
             CreateResult(
                 finish_reason="function_calls",
-                content=[FunctionCall(id="call_test", name="echo", arguments='{"city":"Lisbon"}')],
+                content=[FunctionCall(id="call_test", name="echo", arguments=arguments)],
                 usage=RequestUsage(prompt_tokens=0, completion_tokens=0),
                 cached=False,
             )
@@ -305,3 +305,72 @@ async def test_sdk_request_mode_and_modify_digest(transport, monkeypatch, mode):
         assert "context" not in body
         assert body["hash"] == hash_action("tool:authorize", context)
     assert body["reason"] == "local reason" and result.metadata["receipt_id"] == "sig_test"
+
+
+@pytest.mark.parametrize("path", ["direct", "workbench", "agent_tools", "agent_workbench"])
+@pytest.mark.parametrize("arguments", [[], "", 0, False, [["city", "Lisbon"]], [1], "x", 1, True])
+async def test_object_input_precedes_provider_evaluation(transport, path, arguments):
+    calls, evaluations = [], []
+
+    async def echo(city: str = "default") -> str:
+        calls.append(city)
+        return city
+
+    class ReplacingProvider:
+        async def evaluate(self, **kwargs):
+            evaluations.append(kwargs["args"])
+            return GuardrailResult(Decision.MODIFY, modified_args={"city": "Porto"})
+
+    workbench = path in {"workbench", "agent_workbench"}
+    raw = FunctionTool(echo, description="Object input control")
+    target = attach(StaticWorkbench([raw]) if workbench else raw, ReplacingProvider())
+    if path.startswith("agent"):
+        response = await asyncio.wait_for(
+            agent_for(target, workbench, json.dumps(arguments)).run(task="Echo"), 3
+        )
+        result = next(
+            m.content[0] for m in response.messages if isinstance(m, ToolCallExecutionEvent)
+        )
+    elif workbench:
+        result = await target.call_tool("echo", arguments)
+    else:
+        with pytest.raises(TypeError, match="arguments must be an object"):
+            await target.run_json(arguments, CancellationToken())
+    if path == "agent_tools" and not arguments:
+        # The host erases falsey input types before calling an attached tool.
+        assert evaluations == [{}] and calls == ["Porto"] and not result.is_error
+    else:
+        assert evaluations == [] and calls == []
+        if path != "direct":
+            assert result.is_error
+    assert transport["requests"] == []
+
+
+@pytest.mark.parametrize("path", ["direct", "workbench", "agent_tools", "agent_workbench"])
+@pytest.mark.parametrize("arguments", [None, {}, {"city": "Porto"}])
+async def test_empty_object_and_optional_workbench_arguments(transport, path, arguments):
+    calls = []
+
+    async def echo(city: str = "default") -> str:
+        calls.append(city)
+        return city
+
+    workbench = path in {"workbench", "agent_workbench"}
+    raw = FunctionTool(echo, description="Optional argument control")
+    guard = AsqavGuardrail()
+    target = attach(StaticWorkbench([raw]) if workbench else raw, guard)
+    if path.startswith("agent"):
+        await asyncio.wait_for(
+            agent_for(target, workbench, json.dumps(arguments)).run(task="Echo"), 3
+        )
+    elif workbench:
+        assert not (await target.call_tool("echo", arguments)).is_error
+    elif arguments is None:
+        with pytest.raises(TypeError, match="arguments must be an object"):
+            await target.run_json(arguments, CancellationToken())
+        assert calls == [] and transport["requests"] == []
+        return
+    else:
+        await target.run_json(arguments, CancellationToken())
+    assert calls == ["Porto" if arguments else "default"]
+    assert len(transport["requests"]) == 1

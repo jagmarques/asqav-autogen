@@ -20,6 +20,11 @@ __all__ = ["attach", "GuardedTool", "GuardedWorkbench"]
 _DENY_PREFIX = "Tool call denied by asqav guardrail"
 
 
+def _validate_arguments(args: Mapping[str, Any]) -> None:
+    if not isinstance(args, Mapping):
+        raise TypeError("Tool arguments must be an object")
+
+
 def _validate_result(result: GuardrailResult) -> None:
     if not isinstance(result, GuardrailResult) or not isinstance(result.decision, Decision):
         raise TypeError("guardrail.evaluate() must return a GuardrailResult with a Decision")
@@ -80,6 +85,7 @@ class GuardedTool(BaseTool):
         cancellation_token: CancellationToken,
         call_id: str | None = None,
     ) -> Any:
+        _validate_arguments(args)
         result = await self._guardrail.evaluate(
             tool_name=self._tool.name,
             args=args,
@@ -136,7 +142,9 @@ class GuardedWorkbench(Workbench):
         call_id: str | None = None,
     ) -> ToolResult:
         try:
-            args = dict(arguments or {})
+            supplied = {} if arguments is None else arguments
+            _validate_arguments(supplied)
+            args = dict(supplied)
             result = await self._guardrail.evaluate(
                 tool_name=name,
                 args=args,

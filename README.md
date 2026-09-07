@@ -56,7 +56,11 @@ guard = AsqavGuardrail(agent_name="search-agent", policy=policy)
 
 `ALLOW` passes the input mapping through. `DENY` returns a denial message without calling the wrapped tool; a workbench denial has `is_error=True`. `MODIFY` passes the replacement mapping to the tool for validation; when `modified_args` is `None`, it uses the original mapping. A deny in the signing response overrides a local allow or modification.
 
+Attachments reject non-object arguments before evaluating the policy. A workbench also accepts `None` for a call with no arguments. AutoGen's `tools=[...]` path converts empty arrays, empty strings, zero, false and null to an empty object before the attachment sees them; use a guarded workbench to reject those arrays and scalars at the policy boundary.
+
 Provider exceptions and malformed results stop execution; AutoGen reports them as tool errors in the tested agent path. The cancellation token and call identifier pass to the provider and tool. When cancelling an AutoGen agent run, cancel the outer `agent.run()` task as well as its token: the tested host can otherwise wait on its result queue after a cancelled tool. Cancellation cannot undo a synchronous signing request already running in the SDK's worker thread or a tool's completed side effects.
+
+For direct `run_json()` calls, cancel the asyncio task as well as its token. The real provider does not link its signing wait to the token, and an asynchronous tool may also ignore the token; token-only cancellation can let the tool start after signing returns.
 
 ## Signing and data handling
 
