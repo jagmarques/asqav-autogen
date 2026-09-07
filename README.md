@@ -1,151 +1,88 @@
-<p align="center">
-  <a href="https://asqav.com">
-    <img src="https://asqav.com/logo-text-white.png" alt="Asqav" width="200">
-  </a>
-</p>
-<p align="center">
-  An AutoGen GuardrailProvider that signs every guarded tool call with asqav.
-</p>
-<p align="center">
-  <a href="https://www.asqav.com/">Website</a> |
-  <a href="https://www.asqav.com/docs">Docs</a> |
-  <a href="https://github.com/jagmarques/asqav-sdk">SDK</a> |
-  <a href="https://github.com/microsoft/autogen/issues/7405">autogen#7405</a>
-</p>
+# Asqav tool guardrails for AutoGen
 
-# Asqav GuardrailProvider for AutoGen
+This package evaluates tool requests with a local policy and attempts to record each decision through [Asqav](https://asqav.com). Attach a guard to an AutoGen tool or workbench before passing it to `AssistantAgent`. A denied request stops at the attachment; an allowed request reaches the wrapped tool.
 
-This package implements the `GuardrailProvider` protocol proposed in
-[microsoft/autogen#7405](https://github.com/microsoft/autogen/issues/7405). It
-sits at the pre-execution point of a tool call, records the decision through
-[asqav](https://asqav.com) as a cryptographic receipt, and returns the receipt
-id with the verdict.
-
-It is a standalone package. The protocol types ship here, so you do not need any
-change to autogen to use it. When (or if) the protocol lands in `autogen-core`,
-the shapes match and this stays a drop-in.
+Asqav maintains this integration. Signing uses an Asqav API key and the Asqav service. The package does not verify receipt signatures or prove that an allowed tool completed.
 
 ## Install
 
-Not yet on PyPI. Install from GitHub:
+Install the source:
 
 ```bash
-pip install "asqav-autogen @ git+https://github.com/jagmarques/asqav-autogen.git"
+python -m pip install "asqav-autogen @ git+https://github.com/jagmarques/asqav-autogen.git" "autogen-agentchat>=0.7.5,<0.8"
 ```
 
-This pulls in the `asqav` SDK and `autogen-core`.
+The package requires AutoGen Core 0.7.5 through the 0.7 series and Asqav SDK 0.10.10 through the 0.10 series. The consumer tests exercise AutoGen Core and AgentChat 0.7.5 with SDK 0.10.10. The policy types belong to this package; they do not depend on adoption of an upstream proposal.
 
-## Quickstart
+## Attach a tool
 
-Five lines from import to a signed receipt for one guarded tool call:
+Configure `ASQAV_API_KEY` in the application environment. Supply your configured AutoGen model client as `model_client`:
 
 ```python
-from autogen_core import CancellationToken
+import asqav
+from autogen_agentchat.agents import AssistantAgent
 from autogen_core.tools import FunctionTool
 from asqav_autogen import AsqavGuardrail, attach
 
-guardrail = AsqavGuardrail(api_key="sk_...", agent_name="autogen-quickstart")
-tool = attach(FunctionTool(get_weather, description="Get the weather"), guardrail)
-result = await tool.run_json({"city": "Lisbon"}, CancellationToken())
-print(guardrail.last_receipt_id)  # asqav receipt for that call
+def get_weather(city: str) -> str:
+    """Return a local example response."""
+    return f"Weather in {city}: sunny"
+
+asqav.init()
+guard = AsqavGuardrail(agent_name="weather-agent", denied_tools={"shell"})
+tool = attach(FunctionTool(get_weather, description="Example weather"), guard)
+agent = AssistantAgent("weather_agent", model_client=model_client, tools=[tool])
+result = await agent.run(task="Get the weather in Lisbon")
 ```
 
-The full runnable version is in [`examples/quickstart.py`](examples/quickstart.py).
-It reads `ASQAV_API_KEY` from the environment and signs against api.asqav.com.
+For direct tool execution, see [examples/quickstart.py](examples/quickstart.py). That example calls the Asqav API and prints a local weather fixture, not a weather service response.
 
-## Digest binding
+For a workbench, pass `workbench=attach(my_workbench, guard)` to `AssistantAgent` instead of `tools`. The wrapper delegates listing, start/stop/reset and runtime state. Its asynchronous context manager returns the guarded wrapper. Tool wrappers preserve schemas, argument/return types, return formatting and JSON runtime state.
 
-The design follows one rule from the autogen#7405 discussion: bind the receipt
-to the arguments that actually run.
+Attachments expose guarded non-streaming calls. Streaming tools use their ordinary `run_json` path; streaming-only operations are not forwarded. Configuration export with `dump_component()` raises `NotImplementedError`: a policy callback cannot be reconstructed from an unguarded tool configuration. Restore runtime state into an attachment that your application has already configured.
 
-> If a guardrail rewrites the args, that is a new bound payload and it needs its
-> own digest, otherwise the record you signed and the args that ran quietly
-> diverge.
+## Choose the policy
 
-> The calls that cause pain later are the denied and the rewritten ones, not the
-> clean executes. A record that only fires when a tool actually runs misses half
-> of them.
-
-So on a `MODIFY`, the guardrail signs the rewritten arguments, not the original.
-The receipt carries the digest of the effective payload plus the digest of the
-original, so a verifier can see the before and after. And every path signs,
-including `DENY`, so a blocked call still leaves a record.
-
-## Usage
-
-`attach()` wraps a `BaseTool` (guarding `run_json`) or a `Workbench` (guarding
-`call_tool`) in an explicit proxy. Autogen internals are never patched.
+A matching denylist entry takes precedence. Otherwise, a custom policy returns `PolicyVerdict`; without a custom policy the default is `ALLOW`.
 
 ```python
-from asqav_autogen import AsqavGuardrail, Decision, PolicyVerdict, attach
+import asqav
+from asqav_autogen import AsqavGuardrail, Decision, PolicyVerdict
 
-# Deny a small set of tools by name, allow the rest. Every decision is a receipt.
-guardrail = AsqavGuardrail(agent_name="my-agents", denied_tools={"shell", "wire_transfer"})
-guarded_tool = attach(my_tool, guardrail)
-guarded_workbench = attach(my_workbench, guardrail)
-```
-
-Bring your own decision. Pass a `policy` callback and asqav signs whatever it
-returns. Return `MODIFY` to sanitize arguments before they run:
-
-```python
 def policy(tool_name, args):
     if tool_name == "search":
-        # cap an unbounded parameter, then let the call proceed
-        return PolicyVerdict(Decision.MODIFY, "capped limit", {**args, "limit": min(args.get("limit", 100), 100)})
+        return PolicyVerdict(Decision.MODIFY, "capped limit", {**args, "limit": 100})
     return PolicyVerdict(Decision.ALLOW)
 
-guardrail = AsqavGuardrail(agent_name="my-agents", policy=policy)
+asqav.init()
+guard = AsqavGuardrail(agent_name="search-agent", policy=policy)
 ```
 
-## Decision mapping
+`ALLOW` passes the input mapping through. `DENY` returns a denial message without calling the wrapped tool; a workbench denial has `is_error=True`. `MODIFY` passes the replacement mapping to the tool for validation; when `modified_args` is `None`, it uses the original mapping. A deny in the signing response overrides a local allow or modification.
 
-| asqav / policy | GuardrailResult | Effect on the tool |
-|---|---|---|
-| allow | `Decision.ALLOW` | runs with the original args, signed |
-| deny | `Decision.DENY` | does not run, the deny is signed |
-| modify | `Decision.MODIFY` | runs with the rewritten args, signed |
+Attachments reject non-object arguments before evaluating the policy. A workbench also accepts `None` for a call with no arguments. AutoGen's `tools=[...]` path converts empty arrays, empty strings, zero, false and null to an empty object before the attachment sees them; use a guarded workbench to reject those arrays and scalars at the policy boundary.
 
-An asqav deny always wins. If the backend policy denies a call the local policy
-allowed, the final decision is `DENY`.
+Provider exceptions and malformed results stop execution; AutoGen reports them as tool errors in the tested agent path. The cancellation token and call identifier pass to the provider and tool. When cancelling an AutoGen agent run, cancel the outer `agent.run()` task as well as its token: the tested host can otherwise wait on its result queue after a cancelled tool. Cancellation cannot undo a synchronous signing request already running in the SDK's worker thread or a tool's completed side effects.
 
-## Fail-closed by default
+For direct `run_json()` calls, cancel the asyncio task as well as its token. The real provider does not link its signing wait to the token, and an asynchronous tool may also ignore the token; token-only cancellation can let the tool start after signing returns.
 
-If asqav is unreachable, the guardrail cannot produce a receipt for the
-decision. By default it denies the call rather than act without a record:
+## Signing and data handling
 
-```python
-AsqavGuardrail(fail_closed=True)   # default: block on an asqav error
-AsqavGuardrail(fail_closed=False)  # proceed and drop the receipt
+A successful signing request adds `receipt_id` to `GuardrailResult.metadata`. `last_receipt_id` identifies the most recent successful response, so it can refer to another call after a signing failure. Signing failure normally returns `DENY`; `fail_closed=False` retains the local policy result without a receipt. `observe=True` skips signing while retaining local policy decisions. Provider construction can still create or fetch an Asqav agent in observation mode. The SDK may retry retryable HTTP failures.
+
+The provider computes `hash_action("tool:args", {"args": mapping})` for the selected argument mapping. Modification also computes an original-argument digest. These digests enter signing context with the tool name, agent name, call identifier and decision. Non-serializable arguments can produce a `None` digest. Tool validation, coercion and execution happen afterwards; the package does not establish that a receipt commits the final executed argument bytes.
+
+Set `ASQAV_MODE=full-payload` to send that selected context, or `ASQAV_MODE=hash-only` to hash the context locally. Raw argument mappings are not placed in signing context. The SDK can still send identifiers, policy decision and reason separately; a custom reason may contain sensitive input. Other AutoGen components and model clients have their own data handling. The integration does not independently validate what the service retains in a receipt.
+
+## Development
+
+```bash
+python -m pip install -e ".[dev]"
+python -m pytest -q
 ```
 
-## Standalone, no upstream change
-
-The `Decision`, `GuardrailResult`, and `GuardrailProvider` types in this package
-mirror the autogen#7405 proposal exactly. They are defined here, not imported
-from autogen, so nothing upstream needs to move for this to work today.
-
-## Data handling
-
-`asqav-autogen` is a thin wrapper around the `asqav` Python SDK and inherits its
-mode behavior. On asqav cloud the SDK hashes your tool arguments locally and
-sends only the hash plus a small metadata bag, so raw arguments stay on your
-side. Self-hosted asqav can take the full context for server-side policy and
-richer audit views.
-
-## Configuration
-
-```python
-# Use an existing asqav agent by id
-AsqavGuardrail(agent_id="ag_abc123")
-
-# Override the API key
-AsqavGuardrail(api_key="sk_other", agent_name="authz-agents")
-
-# Observe only: no receipts written, decisions still returned
-AsqavGuardrail(observe=True)
-```
+The consumer regression uses actual `AssistantAgent`, `FunctionTool`, workbenches and the released SDK. AutoGen's replay model and intercepted HTTP responses provide deterministic local replies, and sockets are prohibited. It checks tool execution counts, denial, modification, error handling, cancellation, runtime state and configuration boundaries. These checks do not call a model or production service and do not prove cryptographic receipt validity. A separate live test requires `ASQAV_API_KEY` and is skipped without it.
 
 ## License
 
-MIT License. See [LICENSE](LICENSE).
+[Elastic License 2.0](LICENSE).

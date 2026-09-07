@@ -1,8 +1,4 @@
-"""The GuardrailProvider protocol proposed in microsoft/autogen#7405.
-
-These types mirror the issue body exactly so this package is a drop-in if the
-protocol lands in autogen-core. Nothing here patches autogen internals.
-"""
+"""Package-owned tool policy types used by Asqav attachments."""
 
 from __future__ import annotations
 

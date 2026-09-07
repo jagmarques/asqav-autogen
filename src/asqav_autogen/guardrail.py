@@ -1,9 +1,4 @@
-"""AsqavGuardrail: a GuardrailProvider backed by asqav signed receipts.
-
-Every evaluate() records the tool-call decision as an asqav receipt. Allow,
-deny, and modify each produce a receipt, and the receipt id comes back in
-GuardrailResult.metadata. See microsoft/autogen#7405 for the protocol.
-"""
+"""Evaluate local tool policy and request Asqav signing for its decision."""
 
 from __future__ import annotations
 
@@ -36,12 +31,12 @@ class PolicyVerdict:
 
 
 # (tool_name, args) -> PolicyVerdict. The callback owns the local decision,
-# asqav owns the signed receipt for whatever it decides.
+# Asqav receives a signing request for the selected decision.
 PolicyFn = Callable[[str, Mapping[str, Any]], PolicyVerdict]
 
 
 def _args_digest(args: Mapping[str, Any]) -> str | None:
-    """sha256 over JCS-canonical args, or None when args are not serializable."""
+    """Hash the tool:args action/context envelope, or return None on invalid input."""
     try:
         return hash_action(_ARGS_DIGEST_ACTION, {"args": dict(args)})
     except (TypeError, ValueError):
@@ -49,17 +44,12 @@ def _args_digest(args: Mapping[str, Any]) -> str | None:
 
 
 class AsqavGuardrail(AsqavAdapter):
-    """GuardrailProvider that signs every guarded tool call through asqav.
+    """Evaluate a local policy and attempt to sign its decision through Asqav.
 
-    On evaluate() the guardrail computes a local verdict (a denylist, an
-    optional policy callback, or allow-by-default), signs that verdict as an
-    asqav receipt, and lets an asqav deny override to block. The receipt id
-    travels back in GuardrailResult.metadata, so "who authorized this tool
-    call and when" is answerable from a tamper-evident record.
-
-    asqav allow maps to ALLOW, asqav deny maps to DENY. A policy callback may
-    return MODIFY with rewritten args, and the rewritten args are the payload
-    that gets signed, so the receipt binds the args that actually run.
+    Successful signing adds a receipt identifier to the result metadata.
+    Signing failure and observation can return a decision without a receipt.
+    Argument digests cover the selected mappings before tool validation and
+    execution; this provider does not verify execution or receipt signatures.
     """
 
     def __init__(
@@ -100,10 +90,10 @@ class AsqavGuardrail(AsqavAdapter):
         call_id: str | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> GuardrailResult:
-        """Authorize one tool call and record the verdict as an asqav receipt."""
+        """Evaluate a tool request and attempt to record its decision."""
         verdict = self._local_verdict(tool_name, args)
 
-        # MODIFY rebinds the payload: the rewritten args are what we sign and run.
+        # MODIFY selects the mapping to digest and pass to the tool for validation.
         effective_args: Mapping[str, Any] = args
         if verdict.decision is Decision.MODIFY and verdict.modified_args is not None:
             effective_args = verdict.modified_args
@@ -138,7 +128,7 @@ class AsqavGuardrail(AsqavAdapter):
                 )
                 self._signatures.append(sig)
             except Exception as exc:
-                # asqav is the evidence layer. No receipt means no proof, so
+                # Asqav records the decision. A failed request has no receipt, so
                 # fail closed by default: deny rather than act without a record.
                 logger.warning("asqav sign failed: %s", exc)
                 if self._fail_closed:
@@ -157,7 +147,7 @@ class AsqavGuardrail(AsqavAdapter):
 
         metadata["receipt_id"] = getattr(sig, "signature_id", None)
 
-        # asqav governance can override an allow or modify to deny. Deny wins.
+        # Asqav governance can override an allow or modify to deny. Deny wins.
         asqav_denied = sig is not None and (
             getattr(sig, "policy_decision", "permit") == "deny"
             or getattr(sig, "decision", None) == "deny"
