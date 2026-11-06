@@ -7,7 +7,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, hz-ci-light]
     strategy:
       fail-fast: false
       matrix:
@@ -29,7 +29,7 @@ jobs:
         run: python -m build
 
   ci-ok:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, hz-ci-light]
     needs: test
     steps:
       - run: echo "CI passed"
